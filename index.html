@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f1115">
+<title>Noise Analyzer — dB Meter</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181c24;
+    --panel2: #1f2430;
+    --text: #e8ecf3;
+    --muted: #8b93a7;
+    --accent: #4cc2ff;
+    --ok: #3ddc84;
+    --warn: #ffc54d;
+    --danger: #ff5d5d;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+    gap: 14px;
+    user-select: none;
+  }
+  header { text-align: center; margin-top: 4px; }
+  header h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: 0.02em; }
+  header p { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+
+  .card {
+    background: var(--panel);
+    border-radius: var(--radius);
+    padding: 16px;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+  }
+
+  /* Gauge */
+  #gaugeWrap { display: flex; flex-direction: column; align-items: center; }
+  #gauge { width: 100%; max-width: 340px; height: auto; display: block; }
+  #dbValue {
+    font-size: 3.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    margin-top: -52px;
+  }
+  #dbUnit { font-size: 1rem; color: var(--muted); font-weight: 400; }
+  #levelLabel {
+    margin-top: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    padding: 4px 14px;
+    border-radius: 999px;
+    background: var(--panel2);
+    transition: color 0.3s;
+  }
+
+  /* Stats */
+  .stats { display: flex; justify-content: space-around; text-align: center; }
+  .stat .v { font-size: 1.45rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+
+  /* History chart */
+  #chart { width: 100%; height: 120px; display: block; border-radius: 8px; background: var(--panel2); }
+  .chart-title { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+
+  /* Controls */
+  .controls { display: flex; gap: 10px; width: 100%; max-width: 440px; }
+  button {
+    flex: 1;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #04121d;
+    background: var(--accent);
+    transition: opacity 0.15s, transform 0.05s;
+  }
+  button:active { transform: scale(0.97); }
+  button.secondary { background: var(--panel2); color: var(--text); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Calibration */
+  .cal { display: flex; align-items: center; gap: 10px; }
+  .cal label { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+  .cal input[type=range] { flex: 1; accent-color: var(--accent); }
+  .cal .cal-val { font-variant-numeric: tabular-nums; font-size: 0.85rem; min-width: 52px; text-align: right; }
+
+  #status { color: var(--muted); font-size: 0.8rem; text-align: center; min-height: 1.2em; }
+  #status.error { color: var(--danger); }
+
+  .reference { font-size: 0.75rem; color: var(--muted); line-height: 1.7; }
+  .reference b { color: var(--text); font-weight: 600; }
+  details summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
+  details[open] summary { margin-bottom: 8px; }
+
+  footer { color: var(--muted); font-size: 0.7rem; text-align: center; padding-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔊 Noise Analyzer</h1>
+  <p>Measure ambient noise with your phone's microphone</p>
+</header>
+
+<div class="card" id="gaugeWrap">
+  <canvas id="gauge" width="680" height="400"></canvas>
+  <div id="dbValue">–<span id="dbUnit"> dB</span></div>
+  <div id="levelLabel">Press Start</div>
+</div>
+
+<div class="card stats">
+  <div class="stat"><div class="v" id="minVal">–</div><div class="l">Min</div></div>
+  <div class="stat"><div class="v" id="avgVal">–</div><div class="l">Avg</div></div>
+  <div class="stat"><div class="v" id="maxVal">–</div><div class="l">Max</div></div>
+</div>
+
+<div class="card">
+  <div class="chart-title">Last 60 seconds</div>
+  <canvas id="chart" width="816" height="240"></canvas>
+</div>
+
+<div class="controls">
+  <button id="startBtn">▶ Start</button>
+  <button id="resetBtn" class="secondary" disabled>Reset</button>
+</div>
+
+<div class="card cal">
+  <label for="calSlider">Calibration</label>
+  <input type="range" id="calSlider" min="-30" max="30" step="1" value="0">
+  <span class="cal-val" id="calVal">+0 dB</span>
+</div>
+
+<div id="status"></div>
+
+<div class="card">
+  <details>
+    <summary>📖 Reference levels &amp; notes</summary>
+    <div class="reference">
+      <b>20 dB</b> — rustling leaves, whisper<br>
+      <b>40 dB</b> — quiet library, calm room<br>
+      <b>60 dB</b> — normal conversation<br>
+      <b>70 dB</b> — vacuum cleaner, busy street<br>
+      <b>85 dB</b> — heavy traffic (hearing-risk threshold for prolonged exposure)<br>
+      <b>100 dB</b> — power tools, nightclub<br>
+      <b>120 dB</b> — rock concert, siren (pain threshold)<br><br>
+      ⚠️ Phone microphones are not calibrated measurement devices. Readings are
+      approximate dB&nbsp;SPL estimates. Use the calibration slider to match a known
+      reference (e.g. a real sound-level meter) for better accuracy.
+      Microphone access requires HTTPS.
+    </div>
+  </details>
+</div>
+
+<footer>Runs entirely in your browser — no audio is recorded or uploaded.</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- Config -------------------------------------------------------------
+  // Empirical offset mapping dBFS -> approximate dB SPL for typical phone mics.
+  // A full-scale signal (~0 dBFS) is assumed to be ~94 dB SPL by default.
+  const DBFS_TO_SPL_OFFSET = 94;
+  const MIN_DB = 0;
+  const MAX_DB = 120;
+  const HISTORY_SECONDS = 60;
+  const SAMPLES_PER_SECOND = 4; // history resolution
+  const SMOOTHING = 0.85;       // exponential smoothing for the live needle
+
+  // ---- State --------------------------------------------------------------
+  let audioCtx = null;
+  let analyser = null;
+  let mediaStream = null;
+  let rafId = null;
+  let running = false;
+
+  let smoothedDb = null;
+  let minDb = Infinity, maxDb = -Infinity, sumDb = 0, countDb = 0;
+  let calibration = 0;
+
+  const history = new Array(HISTORY_SECONDS * SAMPLES_PER_SECOND).fill(null);
+  let lastHistoryPush = 0;
+
+  // ---- DOM ----------------------------------------------------------------
+  const $ = (id) => document.getElementById(id);
+  const dbValueEl = $("dbValue");
+  const dbUnitEl = $("dbUnit");
+  const levelLabelEl = $("levelLabel");
+  const minEl = $("minVal"), avgEl = $("avgVal"), maxEl = $("maxVal");
+  const startBtn = $("startBtn"), resetBtn = $("resetBtn");
+  const statusEl = $("status");
+  const calSlider = $("calSlider"), calValEl = $("calVal");
+  const gauge = $("gauge"), gctx = gauge.getContext("2d");
+  const chart = $("chart"), cctx = chart.getContext("2d");
+
+  // ---- Helpers ------------------------------------------------------------
+  function levelInfo(db) {
+    if (db < 30)  return { label: "Very quiet", color: "#3ddc84" };
+    if (db < 50)  return { label: "Quiet",      color: "#3ddc84" };
+    if (db < 65)  return { label: "Moderate",   color: "#a8d84c" };
+    if (db < 80)  return { label: "Loud",       color: "#ffc54d" };
+    if (db < 95)  return { label: "Very loud",  color: "#ff8c42" };
+    return            { label: "Dangerous",  color: "#ff5d5d" };
+  }
+
+  function setStatus(msg, isError) {
+    statusEl.textContent = msg || "";
+    statusEl.className = isError ? "error" : "";
+  }
+
+  // ---- Gauge drawing --------------------------------------------------------
+  function drawGauge(db) {
+    const W = gauge.width, H = gauge.height;
+    const cx = W / 2, cy = H * 0.86;
+    const r = Math.min(W, H * 1.6) * 0.42;
+    const start = Math.PI, end = 2 * Math.PI; // semicircle
+
+    gctx.clearRect(0, 0, W, H);
+
+    // Background arc
+    gctx.lineWidth = 26;
+    gctx.lineCap = "round";
+    gctx.strokeStyle = "#262c3a";
+    gctx.beginPath();
+    gctx.arc(cx, cy, r, start, end);
+    gctx.stroke();
+
+    // Colored zone arcs
+    const zones = [
+      { to: 50,  color: "#3ddc84" },
+      { to: 65,  color: "#a8d84c" },
+      { to: 80,  color: "#ffc54d" },
+      { to: 95,  color: "#ff8c42" },
+      { to: 120, color: "#ff5d5d" },
+    ];
+    let zoneStart = MIN_DB;
+    gctx.lineWidth = 8;
+    for (const z of zones) {
+      const a0 = start + (zoneStart - MIN_DB) / (MAX_DB - MIN_DB) * Math.PI;
+      const a1 = start + (z.to - MIN_DB) / (MAX_DB - MIN_DB) * Math.PI;
+      gctx.strokeStyle = z.color;
+      gctx.beginPath();
+      gctx.arc(cx, cy, r + 24, a0 + 0.01, a1 - 0.01);
+      gctx.stroke();
+      zoneStart = z.to;
+    }
+
+    // Value arc
+    if (db != null) {
+      const frac = Math.min(1, Math.max(0, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+      gctx.lineWidth = 26;
+      gctx.strokeStyle = levelInfo(db).color;
+      gctx.beginPath();
+      gctx.arc(cx, cy, r, start, start + frac * Math.PI);
+      gctx.stroke();
+    }
+
+    // Tick labels
+    gctx.fillStyle = "#8b93a7";
+    gctx.font = "600 22px -apple-system, sans-serif";
+    gctx.textAlign = "center";
+    for (let v = 0; v <= 120; v += 20) {
+      const a = start + (v - MIN_DB) / (MAX_DB - MIN_DB) * Math.PI;
+      const tx = cx + Math.cos(a) * (r - 44);
+      const ty = cy + Math.sin(a) * (r - 44) + 8;
+      gctx.fillText(String(v), tx, ty);
+    }
+  }
+
+  // ---- History chart --------------------------------------------------------
+  function drawChart() {
+    const W = chart.width, H = chart.height;
+    cctx.clearRect(0, 0, W, H);
+
+    // Grid lines at 30/60/90 dB
+    cctx.strokeStyle = "rgba(139,147,167,0.18)";
+    cctx.fillStyle = "rgba(139,147,167,0.7)";
+    cctx.font = "20px -apple-system, sans-serif";
+    cctx.lineWidth = 1;
+    for (const g of [30, 60, 90]) {
+      const y = H - (g - MIN_DB) / (MAX_DB - MIN_DB) * H;
+      cctx.beginPath();
+      cctx.moveTo(0, y);
+      cctx.lineTo(W, y);
+      cctx.stroke();
+      cctx.fillText(g + " dB", 8, y - 6);
+    }
+
+    // Area + line
+    const n = history.length;
+    const step = W / (n - 1);
+    let started = false;
+    cctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const v = history[i];
+      if (v == null) continue;
+      const x = i * step;
+      const y = H - Math.min(1, Math.max(0, (v - MIN_DB) / (MAX_DB - MIN_DB))) * H;
+      if (!started) { cctx.moveTo(x, y); started = true; }
+      else cctx.lineTo(x, y);
+    }
+    if (started) {
+      cctx.strokeStyle = "#4cc2ff";
+      cctx.lineWidth = 3;
+      cctx.stroke();
+      // Fill under the line
+      cctx.lineTo(W, H);
+      const firstIdx = history.findIndex((v) => v != null);
+      cctx.lineTo(firstIdx * step, H);
+      cctx.closePath();
+      cctx.fillStyle = "rgba(76,194,255,0.12)";
+      cctx.fill();
+    }
+  }
+
+  // ---- Measurement loop -----------------------------------------------------
+  let floatBuf = null, byteBuf = null;
+  let silentFrames = 0;
+
+  function readRms() {
+    // Prefer float samples; fall back to byte samples on older Safari.
+    if (typeof analyser.getFloatTimeDomainData === "function") {
+      if (!floatBuf || floatBuf.length !== analyser.fftSize)
+        floatBuf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(floatBuf);
+      let sum = 0;
+      for (let i = 0; i < floatBuf.length; i++) sum += floatBuf[i] * floatBuf[i];
+      return Math.sqrt(sum / floatBuf.length);
+    }
+    if (!byteBuf || byteBuf.length !== analyser.fftSize)
+      byteBuf = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(byteBuf);
+    let sum = 0;
+    for (let i = 0; i < byteBuf.length; i++) {
+      const v = (byteBuf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / byteBuf.length);
+  }
+
+  function tick() {
+    if (!running) return;
+
+    const rms = readRms();
+
+    // Diagnose a dead signal: a real mic always has some noise floor.
+    if (rms === 0) {
+      silentFrames++;
+      if (silentFrames === 120) { // ~2s of pure digital silence
+        if (audioCtx && audioCtx.state !== "running") {
+          setStatus("Audio engine is paused — tap anywhere to resume.", true);
+        } else {
+          setStatus("No signal from microphone. Check that no other app is using it and that the browser has mic permission.", true);
+        }
+      }
+    } else if (silentFrames > 0) {
+      silentFrames = 0;
+      setStatus("Listening…");
+    }
+
+    // Convert to dBFS, then estimate SPL
+    const dbfs = 20 * Math.log10(Math.max(rms, 1e-8));
+    let db = dbfs + DBFS_TO_SPL_OFFSET + calibration;
+    db = Math.min(MAX_DB, Math.max(MIN_DB, db));
+
+    smoothedDb = smoothedDb == null ? db : SMOOTHING * smoothedDb + (1 - SMOOTHING) * db;
+    const shown = smoothedDb;
+
+    // Stats
+    minDb = Math.min(minDb, shown);
+    maxDb = Math.max(maxDb, shown);
+    sumDb += shown;
+    countDb++;
+
+    // History (throttled)
+    const now = performance.now();
+    if (now - lastHistoryPush >= 1000 / SAMPLES_PER_SECOND) {
+      history.shift();
+      history.push(shown);
+      lastHistoryPush = now;
+      drawChart();
+    }
+
+    // UI
+    const info = levelInfo(shown);
+    dbValueEl.firstChild.nodeValue = shown.toFixed(1);
+    levelLabelEl.textContent = info.label;
+    levelLabelEl.style.color = info.color;
+    minEl.textContent = minDb.toFixed(0);
+    avgEl.textContent = (sumDb / countDb).toFixed(0);
+    maxEl.textContent = maxDb.toFixed(0);
+    drawGauge(shown);
+
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // ---- Start / stop ---------------------------------------------------------
+  async function start() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus(window.isSecureContext
+          ? "This browser does not support microphone capture (getUserMedia)."
+          : "Microphone requires HTTPS (or localhost). Publish this page over HTTPS.", true);
+        return;
+      }
+
+      // Create AND resume the AudioContext synchronously, while we are still
+      // inside the user-gesture call stack — iOS Safari refuses to start an
+      // AudioContext created after an await, leaving it suspended forever.
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+
+      setStatus("Requesting microphone access…");
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+
+      if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
+
+      const source = audioCtx.createMediaStreamSource(mediaStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      running = true;
+      smoothedDb = null;
+      silentFrames = 0;
+      startBtn.textContent = "⏸ Stop";
+      resetBtn.disabled = false;
+      setStatus("Listening…");
+      tick();
+    } catch (err) {
+      let msg = "Could not access the microphone.";
+      if (err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError"))
+        msg = "Microphone permission denied. Allow access in your browser settings.";
+      else if (err && err.name === "NotFoundError")
+        msg = "No microphone found on this device.";
+      else if (!window.isSecureContext)
+        msg = "Microphone requires HTTPS (or localhost). Publish this page over HTTPS.";
+      setStatus(msg, true);
+      stop();
+    }
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    analyser = null;
+    startBtn.textContent = "▶ Start";
+    if (!statusEl.classList.contains("error")) setStatus("Stopped.");
+  }
+
+  function reset() {
+    minDb = Infinity; maxDb = -Infinity; sumDb = 0; countDb = 0;
+    smoothedDb = null;
+    history.fill(null);
+    minEl.textContent = avgEl.textContent = maxEl.textContent = "–";
+    drawChart();
+  }
+
+  // ---- Events ---------------------------------------------------------------
+  startBtn.addEventListener("click", () => (running ? stop() : start()));
+  resetBtn.addEventListener("click", reset);
+
+  calSlider.addEventListener("input", () => {
+    calibration = Number(calSlider.value);
+    calValEl.textContent = (calibration >= 0 ? "+" : "") + calibration + " dB";
+  });
+
+  // Safety net: any tap resumes a suspended AudioContext (mobile autoplay policies).
+  document.addEventListener("pointerdown", () => {
+    if (running && audioCtx && audioCtx.state === "suspended")
+      audioCtx.resume().then(() => setStatus("Listening…")).catch(() => {});
+  });
+
+  // Keep measuring but pause rendering when tab is hidden; resume cleanly.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && running) {
+      cancelAnimationFrame(rafId);
+      tick();
+    }
+  });
+
+  // Initial paint
+  drawGauge(null);
+  drawChart();
+  if (!window.isSecureContext)
+    setStatus("⚠️ Not a secure context — microphone will be blocked. Serve over HTTPS.", true);
+})();
+</script>
+</body>
+</html>
