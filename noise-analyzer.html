@@ -328,16 +328,49 @@
   }
 
   // ---- Measurement loop -----------------------------------------------------
+  let floatBuf = null, byteBuf = null;
+  let silentFrames = 0;
+
+  function readRms() {
+    // Prefer float samples; fall back to byte samples on older Safari.
+    if (typeof analyser.getFloatTimeDomainData === "function") {
+      if (!floatBuf || floatBuf.length !== analyser.fftSize)
+        floatBuf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(floatBuf);
+      let sum = 0;
+      for (let i = 0; i < floatBuf.length; i++) sum += floatBuf[i] * floatBuf[i];
+      return Math.sqrt(sum / floatBuf.length);
+    }
+    if (!byteBuf || byteBuf.length !== analyser.fftSize)
+      byteBuf = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(byteBuf);
+    let sum = 0;
+    for (let i = 0; i < byteBuf.length; i++) {
+      const v = (byteBuf[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / byteBuf.length);
+  }
+
   function tick() {
     if (!running) return;
 
-    const buf = new Float32Array(analyser.fftSize);
-    analyser.getFloatTimeDomainData(buf);
+    const rms = readRms();
 
-    // RMS of the time-domain signal
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-    const rms = Math.sqrt(sum / buf.length);
+    // Diagnose a dead signal: a real mic always has some noise floor.
+    if (rms === 0) {
+      silentFrames++;
+      if (silentFrames === 120) { // ~2s of pure digital silence
+        if (audioCtx && audioCtx.state !== "running") {
+          setStatus("Audio engine is paused — tap anywhere to resume.", true);
+        } else {
+          setStatus("No signal from microphone. Check that no other app is using it and that the browser has mic permission.", true);
+        }
+      }
+    } else if (silentFrames > 0) {
+      silentFrames = 0;
+      setStatus("Listening…");
+    }
 
     // Convert to dBFS, then estimate SPL
     const dbfs = 20 * Math.log10(Math.max(rms, 1e-8));
@@ -378,6 +411,19 @@
   // ---- Start / stop ---------------------------------------------------------
   async function start() {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus(window.isSecureContext
+          ? "This browser does not support microphone capture (getUserMedia)."
+          : "Microphone requires HTTPS (or localhost). Publish this page over HTTPS.", true);
+        return;
+      }
+
+      // Create AND resume the AudioContext synchronously, while we are still
+      // inside the user-gesture call stack — iOS Safari refuses to start an
+      // AudioContext created after an await, leaving it suspended forever.
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+
       setStatus("Requesting microphone access…");
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -387,8 +433,7 @@
         },
       });
 
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
+      if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
 
       const source = audioCtx.createMediaStreamSource(mediaStream);
       analyser = audioCtx.createAnalyser();
@@ -397,6 +442,7 @@
 
       running = true;
       smoothedDb = null;
+      silentFrames = 0;
       startBtn.textContent = "⏸ Stop";
       resetBtn.disabled = false;
       setStatus("Listening…");
@@ -439,6 +485,12 @@
   calSlider.addEventListener("input", () => {
     calibration = Number(calSlider.value);
     calValEl.textContent = (calibration >= 0 ? "+" : "") + calibration + " dB";
+  });
+
+  // Safety net: any tap resumes a suspended AudioContext (mobile autoplay policies).
+  document.addEventListener("pointerdown", () => {
+    if (running && audioCtx && audioCtx.state === "suspended")
+      audioCtx.resume().then(() => setStatus("Listening…")).catch(() => {});
   });
 
   // Keep measuring but pause rendering when tab is hidden; resume cleanly.
